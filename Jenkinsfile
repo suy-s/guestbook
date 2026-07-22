@@ -13,66 +13,27 @@ pipeline {
         stage('Checkout') {
             steps {
                 git branch: 'master', url:'https://github.com/suy-s/guestbook.git'
+
+                dir('/root/sub-workspace/guestbook-config'){
+                    git branch: 'master', url:'https://github.com/suy-s/guestbook-config.git'
+                }
             }
         }
+
         stage('Build') {
             steps {
                 sh './mvnw clean package'
             }
         }
-        stage('Unit Test') {
-            steps {
-                sh './mvnw test'
-            }
-            
-            post {
-                always {
-                    junit '**/target/surefire-reports/TEST-*.xml'
-                }
-            }
-        }
 
-        stage('SonarQube Analysis') {
-            steps{
-                echo 'SonarQube Analysis'
-                /*
-                withSonarQubeEnv('SonarQube-Server'){
-                    sh '''
-                        ./mvnw sonar:sonar \
-                        -Dsonar.projectKey=guestbook \
-                        -Dsonar.host.url=http://192.168.56.143:9000 \
-                        -Dsonar.login=21193ff67973f0efc068ac33ce547e3da8c671b7
-                    '''
-                }
-                */
-            }
-        }
-        stage('SonarQube Quality Gate'){
-            steps{
-                echo 'SonarQube Quality Gate'
-                /*
-                timeout(time: 1, unit: 'MINUTES') {
-                    script{
-                        def qg = waitForQualityGate()
-                        if(qg.status != 'OK') {
-                            echo "NOT OK Status: ${qg.status}"
-                            error "Pipeline aborted due to quality gate failure: ${qg.status}"
-                        } else{
-                            echo "OK Status: ${qg.status}"
-                        }
-                    }
-                }
-                */
-            }
-        }
         stage('Docker Image Build') {
             steps {
                 script {
-                    //oDockImage = docker.build(strDockerImage)
                     oDockImage = docker.build(strDockerImage, "--build-arg VERSION=${strDockerTag} -f Dockerfile .")
                 }
             }
         }
+
         stage('Docker Image Push') {
             steps {
                 script {
@@ -82,48 +43,37 @@ pipeline {
                 }
             }
         }
-        stage('Staging Deploy') {
+
+        stage('Config-Repo PUSH') {
+            environment {
+                GITHUB_ACCESS_TOKEN = credentials('github-access-token')
+            }
             steps {
-                sshagent(credentials: ['Staging-PrivateKey']) {
-                    sh "ssh -o StrictHostKeyChecking=no root@172.31.0.110 docker container rm -f guestbookapp"
-                    sh "ssh -o StrictHostKeyChecking=no root@172.31.0.110 docker container run \
-                                        -d \
-                                        -p 38080:80 \
-                                        --name=guestbookapp \
-                                        -e MYSQL_IP=172.31.0.100 \
-                                        -e MYSQL_PORT=3306 \
-                                        -e MYSQL_DATABASE=guestbook \
-                                        -e MYSQL_USER=root \
-                                        -e MYSQL_PASSWORD=education \
-                                        ${strDockerImage} "
+                dir('/root/sub-workspace/guestbook-config'){
+                    sh '''
+                        sed -i "s/cicd_guestbook:.*/cicd_guestbook:${strDockerTag}/g" guestbook/guestbook_deploy.yaml
+                        git add guestbook/guestbook_deploy.yaml
+                        git commit -m "[UPDATE] guestbook image tag - ${strDockerImage} (by jenkins)"
+                        git push "https://suy-s:${GITHUB_ACCESS_TOKEN}@github.com/suy-s/guestbook-config.git"
+                    '''
                 }
             }
         }
-        stage ('JMeter LoadTest') {
-            steps { 
-                sh '~/lab/sw/jmeter/bin/jmeter.sh -j jmeter.save.saveservice.output_format=xml -n -t src/main/jmx/guestbook_loadtest.jmx -l loadtest_result.jtl' 
-                perfReport filterRegex: '', showTrendGraphs: true, sourceDataFiles: 'loadtest_result.jtl' 
-            } 
-        }
-    }
-    post { 
-        always { 
-            emailext (attachLog: true, body: '본문', compressLog: true
-                    , recipientProviders: [buildUser()], subject: '제목', to: 'yu3papa.j@gmail.com')
 
+        stage('ArgoCD Sync') {
+            environment {
+                ARGOCD_API_TOKEN = credentials('argocd-api-token')
+            }
+            steps {
+                sh '''
+                    TOKEN="${ARGOCD_API_TOKEN}"
+                    PAYLOAD='{"prune": true}'
+                    curl -v -k -XPOST \
+                        -H "Authorization: Bearer ${TOKEN}" \
+                        https://172.31.1.200/api/v1/applications/guestbook/sync
+                '''
+            }
         }
-        success { 
-            slackSend(tokenCredentialId: 'slack-token'
-                , channel: '#교육'
-                , color: 'good'
-                , message: "${JOB_NAME} (${BUILD_NUMBER}) :pink_heart:빌드가 성공적으로 끝났습니다.:pink_heart: Details: (<${BUILD_URL} | here >)")
-        }
-        failure { 
-            slackSend(tokenCredentialId: 'slack-token'
-                , channel: '#교육'
-                , color: 'danger'
-                , message: "${JOB_NAME} (${BUILD_NUMBER}) :pink_heart:빌드가 실패하였습니다.:pink_heart: Details: (<${BUILD_URL} | here >)")
     }
-  }
 }
 
