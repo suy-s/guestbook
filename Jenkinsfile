@@ -51,7 +51,7 @@ pipeline {
             steps {
                 dir('/root/sub-workspace/guestbook-config'){
                     sh '''
-                        sed -i "s/cicd_guestbook:.*/cicd_guestbook:${strDockerTag}/g" guestbook/guestbook_deploy.yaml
+                        sed -i "s/cicd_guestbook:.*/cicd_guestbook:${strDockerImage}/g" guestbook/guestbook_deploy.yaml
                         git add guestbook/guestbook_deploy.yaml
                         git commit -m "[UPDATE] guestbook image tag - ${strDockerImage} (by jenkins)"
                         git push "https://suy-s:${GITHUB_ACCESS_TOKEN}@github.com/suy-s/guestbook-config.git"
